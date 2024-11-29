@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using Mirror;
 using PluginAPI.Core;
 using TMPro;
 using UnityEngine;
@@ -11,27 +10,116 @@ namespace BetaTester.SS
 {
     public static class SSHandler
     {
-        private static SSPage _currentPage;
+        private static SSPageManager _pageManager;
 
         public static void Initialize()
         {
-            var page = new SSPage(
-                new SSPageBuilder()
-                    .AddGroupHeader("BetaTester Settings")
-                    .AddButton("BetaTester", "Test", hint: "Test button", onInteract: player => player.SendBroadcast("Test", 5))
-                );
+            _pageManager = new SSPageManager(new SSPageBuilder()
+                .AddGroupHeader("User Reporting / 플레이어 신고")
+                .AddPlainText("플레이어 검색", "플레이어 이름을 입력하세요.", 256, TMP_InputField.ContentType.Standard,
+                    "신고할 플레이어의 이름을 입력하세요.")
+                .AddTextArea("의사소통", SSTextArea.FoldoutMode.NotCollapsable, null, TextAlignmentOptions.Left)
+                .AddTwoButtons("💬 부적절한 텍스트 채팅", "해당됩니다.", "해당되지 않습니다.", true, "플레이어가 부적절한 텍스트 채팅을 했는지 여부를 선택하세요.")
+                .AddTwoButtons("🔊 부적절한 음성 채팅", "해당됩니다.", "해당되지 않습니다.", true, "플레이어가 부적절한 음성 채팅을 했는지 여부를 선택하세요.")
+                .AddTwoButtons("😠 공격적인 이름", "해당됩니다.", "해당되지 않습니다.", true, "플레이어가 부적절한 이름을 사용했는지 여부를 선택하세요.")
+                .AddTwoButtons("💥 위협", "해당됩니다.", "해당되지 않습니다.", true, "플레이어가 다른 플레이어를 위협했는지 여부를 선택하세요.")
+                .AddTwoButtons("💀 비매너 행위", "해당됩니다.", "해당되지 않습니다.", true, "플레이어가 비매너 행위를 했는지 여부를 선택하세요.")
+                .AddTextArea("게임플레이 방해", SSTextArea.FoldoutMode.NotCollapsable, null, TextAlignmentOptions.Left)
+                .AddTwoButtons("🔧 부정행위", "해당됩니다.", "해당되지 않습니다.", true, "플레이어가 부정행위를 했는지 여부를 선택하세요.")
+                .AddTwoButtons("🐞 버그 사용", "해당됩니다.", "해당되지 않습니다.", true, "플레이어가 버그를 사용했는지 여부를 선택하세요.")
+                .AddTwoButtons("👥 팀원 방해", "해당됩니다.", "해당되지 않습니다.", true, "플레이어가 팀원을 방해했는지 여부를 선택하세요.")
+                .AddTextArea("의사소통", SSTextArea.FoldoutMode.NotCollapsable, null, TextAlignmentOptions.Left)
+                .AddTwoButtons("🚪 게임에서 나감 / 자리 비움", "해당됩니다.", "해당되지 않습니다.", true,
+                    "플레이어가 게임에서 나갔거나 자리를 비웠는지 여부를 선택하세요.")
+                .AddTwoButtons("👾 매크로", "해당됩니다.", "해당되지 않습니다.", true, "플레이어가 매크로를 사용했는지 여부를 선택하세요.")
+                .AddPlainText("자세한 상황", "상황을 더 자세히 설명해주세요.", 512, TMP_InputField.ContentType.Custom,
+                    "플레이어에 대한 추가 정보를 입력하세요.")
+                .AddButton("신고", "신고하겠습니다.", 2f, hint: "선택한 옵션으로 플레이어를 신고합니다."));
+        }
 
-            _currentPage = page;
+        public static void OnJoin(ReferenceHub hub)
+        {
+            _pageManager.Send(hub);
         }
 
         public static void Dispose()
         {
-            _currentPage?.Dispose();
+            _pageManager.Dispose();
+        }
+    }
+
+    public class SSPageManager
+    {
+        public SSPageManager()
+        {
+            Pages = new Dictionary<ReferenceHub, SSPage>();
+            _defaultElements = new List<SSElement>();
+            ServerSpecificSettingsSync.ServerOnSettingValueReceived += OnUserInputReceived;
         }
 
-        public static void SendPage(Player player)
+        public SSPageManager(List<SSElement> defaultElements)
         {
-            _currentPage.Send(player);
+            Pages = new Dictionary<ReferenceHub, SSPage>();
+            _defaultElements = defaultElements;
+            ServerSpecificSettingsSync.ServerOnSettingValueReceived += OnUserInputReceived;
+        }
+
+        public SSPageManager(SSPageBuilder builder)
+        {
+            Pages = new Dictionary<ReferenceHub, SSPage>();
+            _defaultElements = builder.Elements;
+            ServerSpecificSettingsSync.ServerOnSettingValueReceived += OnUserInputReceived;
+        }
+
+        public Dictionary<ReferenceHub, SSPage> Pages { get; }
+
+        public SSPage Get(ReferenceHub hub)
+        {
+            if (Pages.TryGetValue(hub, out var page))
+            {
+                return page;
+            }
+
+            var clonedElements = _defaultElements.Select(x => x.Clone()).ToList();
+
+            var newPage = new SSPage(hub, clonedElements);
+            Pages.Add(hub, newPage);
+            return newPage;
+        }
+
+        private readonly List<SSElement> _defaultElements;
+
+        private void OnUserInputReceived(ReferenceHub hub, ServerSpecificSettingBase entry)
+        {
+            var page = Get(hub);
+
+            if (page == null)
+            {
+                Log.Error($"Received null page for player: {hub.nicknameSync.MyNick} ({hub.netId}) at {DateTime.UtcNow}.");
+                return;
+            }
+
+            page.OnUserInput?.Invoke(page.GetElement(entry.SettingId));
+            page.OnUserInputReceived(entry);
+        }
+
+        public void SendAll()
+        {
+            foreach (var page in Pages.Values)
+            {
+                page.Send();
+            }
+        }
+
+        public void Send(ReferenceHub hub)
+        {
+            Get(hub).Send();
+        }
+
+        public void Dispose()
+        {
+            ServerSpecificSettingsSync.ServerOnSettingValueReceived -= OnUserInputReceived;
+            Pages.Clear();
         }
     }
 
@@ -45,97 +133,89 @@ namespace BetaTester.SS
         /// Initializes a new instance of the <see cref="SSPage"/> class using a builder.
         /// <br/>Builder를 사용하여 <see cref="SSPage"/> 클래스의 새 인스턴스를 초기화합니다.
         /// </summary>
+        /// <param name="owner">The reference hub that owns the page.<br/>페이지를 소유한 참조 허브입니다.</param>
         /// <param name="builder">The builder that defines the settings for the page.<br/>페이지의 설정을 정의하는 빌더입니다.</param>
-        public SSPage(SSPageBuilder builder)
+        public SSPage(ReferenceHub owner, SSPageBuilder builder)
         {
+            Owner = owner;
             Entries = builder.Elements;
-            ServerSpecificSettingsSync.ServerOnSettingValueReceived += OnUserInputReceived;
         }
+
+        public SSPage(ReferenceHub owner, List<SSElement> elements)
+        {
+            Owner = owner;
+            Entries = elements;
+        }
+
+        public ReferenceHub Owner { get; set; }
 
         /// <summary>
         /// Triggered when a user interacts with a setting.<br/>
         /// 사용자가 설정과 상호 작용할 때 호출됩니다.
         /// </summary>
-        public Action<Player, SSElement> OnUserInput { get; set; }
+        public Action<SSElement> OnUserInput { get; set; }
 
         /// <summary>
         /// The list of entries on the page.<br/>
         /// 페이지의 항목 목록입니다.
         /// </summary>
-        public Dictionary<int, SSElement> Entries { get; }
-
-        /// <summary>
-        /// Sends the page settings to a specific player.<br/>
-        /// 특정 플레이어에게 페이지 설정을 전송합니다.
-        /// </summary>
-        /// <param name="player">The player to receive the settings.<br/>설정을 받을 플레이어입니다.</param>
-        public void Send(Player player) => Send(player.ReferenceHub);
+        public List<SSElement> Entries { get; }
 
         /// <summary>
         /// Sends the page settings to a specific reference hub.<br/>
         /// 특정 ReferenceHub에 페이지 설정을 전송합니다.
         /// </summary>
-        /// <param name="hub">The reference hub to receive the settings.<br/>설정을 받을 ReferenceHub입니다.</param>
-        public void Send(ReferenceHub hub)
+        public void Send()
         {
-            if (!NetworkServer.active) return;
-
-            ServerSpecificSettingsSync.DefinedSettings = Entries.Select(x => x.Value.Base).ToArray();
-            ServerSpecificSettingsSync.SendToPlayer(hub);
+            var elements = Entries.Select(x => x.Base).ToArray();
+            Owner.connectionToClient.Send(new SSSEntriesPack(elements, ServerSpecificSettingsSync.Version));
         }
 
-        private void OnUserInputReceived(ReferenceHub player, ServerSpecificSettingBase entry)
+        public SSElement GetElement(int id) => Entries.FirstOrDefault(x => x.Base.SettingId == id);
+        public bool TryGetElement(int id, out SSElement element) => (element = GetElement(id)) != null;
+
+        internal void OnUserInputReceived(ServerSpecificSettingBase entry)
         {
             if (entry == null)
             {
-                Log.Error("Received null entry.");
+                Log.Error($"Received null entry from player: {Owner.nicknameSync.MyNick} ({Owner.netId}) at {DateTime.UtcNow}.");
                 return;
             }
 
-            if (!Entries.TryGetValue(entry.SettingId, out var element))
-            {
-                Log.Error($"No element found for {entry.Label} ({entry.SettingId})");
-                return;
-            }
-
-            OnUserInput?.Invoke(Player.Get(player), element);
+            var element = GetElement(entry.SettingId);
 
             if (element == null)
             {
-                Log.Error($"No element found for {entry.Label} ({entry.SettingId})");
+                Log.Error($"Element not found for setting '{entry.Label}' with ID {entry.SettingId}. Player: {Owner.nicknameSync.MyNick} ({Owner.netId}).");
                 return;
             }
+
+            OnUserInput?.Invoke(element);
 
             switch (element)
             {
                 case SSButtonElement buttonElement:
-                    buttonElement.OnInteract?.Invoke(Player.Get(player));
+                    buttonElement.OnInteract?.Invoke(buttonElement);
                     break;
                 case SSDropdownElement dropdownElement:
-                    dropdownElement.OnChanged?.Invoke(Player.Get(player));
+                    dropdownElement.OnChanged?.Invoke(dropdownElement);
                     break;
                 case SSKeybindElement keybindElement:
-                    keybindElement.OnInput?.Invoke(Player.Get(player));
+                    keybindElement.OnInput?.Invoke(keybindElement);
                     break;
                 case SSPlainTextElement plainTextElement:
-                    plainTextElement.OnChanged?.Invoke(Player.Get(player));
+                    plainTextElement.OnChanged?.Invoke(plainTextElement);
                     break;
                 case SSSliderElement sliderElement:
-                    sliderElement.OnChanged?.Invoke(Player.Get(player));
+                    sliderElement.OnChanged?.Invoke(sliderElement);
+                    break;
+                case SSTwoButtonElement twoButtonElement:
+                    twoButtonElement.OnChanged?.Invoke(twoButtonElement);
                     break;
                 default:
-                    Log.Error($"No action defined for {element.Type}");
+                    Log.Error($"Unhandled action for element type '{element.Type}' in page '{this}'. Player: {Owner.nicknameSync.MyNick} ({Owner.netId}). Element Label: {element.Label}.");
                     break;
             }
-        }
-
-        /// <summary>
-        /// Disposes of the page and unsubscribes from event handlers.<br/>
-        /// 페이지를 삭제하고 이벤트 핸들러를 구독 취소합니다.
-        /// </summary>
-        public void Dispose()
-        {
-            ServerSpecificSettingsSync.ServerOnSettingValueReceived -= OnUserInputReceived;
         }
     }
 
@@ -149,7 +229,7 @@ namespace BetaTester.SS
         /// The list of entries to be added to the settings page.<br/>
         /// 설정 페이지에 추가될 항목 목록입니다.
         /// </summary>
-        public Dictionary<int, SSElement> Elements { get; }
+        public List<SSElement> Elements { get; }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="SSPageBuilder"/> class.<br/>
@@ -157,7 +237,7 @@ namespace BetaTester.SS
         /// </summary>
         public SSPageBuilder()
         {
-            Elements = new Dictionary<int, SSElement>();
+            Elements = new List<SSElement>();
             _id = 0;
         }
 
@@ -169,11 +249,11 @@ namespace BetaTester.SS
         /// </summary>
         /// <returns>The builder instance.<br/>빌더 인스턴스를 반환합니다.</returns>
         public SSPageBuilder AddButton(string label, string buttonText, float? holdTime = null, string hint = null,
-            Action<Player> onInteract = null)
+            Action<SSButtonElement> onInteract = null)
         {
             var button = new SSButtonElement
                 { Base = new SSButton(++_id, label, buttonText, holdTime, hint), OnInteract = onInteract };
-            Elements.Add(_id, button);
+            Elements.Add(button);
             return this;
         }
 
@@ -190,14 +270,14 @@ namespace BetaTester.SS
         /// <returns>The builder instance.<br/>빌더 인스턴스를 반환합니다.</returns>
         public SSPageBuilder AddDropdown(string label, string[] options, int defaultIndex = 0,
             SSDropdownSetting.DropdownEntryType entryType = SSDropdownSetting.DropdownEntryType.Regular,
-            string hint = null, Action<Player> onChanged = null)
+            string hint = null, Action<SSDropdownElement> onChanged = null)
         {
             var dropdown = new SSDropdownElement
             {
                 Base = new SSDropdownSetting(++_id, label, options, defaultIndex, entryType, hint),
                 OnChanged = onChanged
             };
-            Elements.Add(_id, dropdown);
+            Elements.Add(dropdown);
             return this;
         }
 
@@ -212,7 +292,7 @@ namespace BetaTester.SS
         public SSPageBuilder AddGroupHeader(string label, bool reducedPadding = false, string hint = null)
         {
             var header = new SSGroupHeaderElement { Base = new SSGroupHeader(label, reducedPadding, hint) };
-            Elements.Add(_id++, header);
+            Elements.Add(header);
             return this;
         }
 
@@ -227,25 +307,36 @@ namespace BetaTester.SS
         /// <param name="onInput">키바인드 입력 시 실행할 작업입니다.</param>
         /// <returns></returns>
         public SSPageBuilder AddKeybind(string label, KeyCode suggestedKey = KeyCode.None,
-            bool preventInteractionOnGUI = true, string hint = null, Action<Player> onInput = null)
+            bool preventInteractionOnGUI = true, string hint = null, Action<SSKeybindElement> onInput = null)
         {
             var keybind = new SSKeybindElement
             {
                 Base = new SSKeybindSetting(++_id, label, suggestedKey, preventInteractionOnGUI, hint),
                 OnInput = onInput
             };
-            Elements.Add(_id, keybind);
+            Elements.Add(keybind);
             return this;
         }
 
-        public SSPageBuilder AddPlainText(string label, string placeholder = "...", int characterLimit = 64, TMP_InputField.ContentType contentType = TMP_InputField.ContentType.Standard, string hint = null, Action<Player> onChanged = null)
+        /// <summary>
+        /// Adds a plain text setting to the page.<br/>
+        /// 페이지에 평문 설정을 추가합니다.
+        /// </summary>
+        /// <param name="label">The label of the plain text input.<br/>평문 입력의 레이블입니다.</param>
+        /// <param name="placeholder">The placeholder of the plain text input.<br/>평문 입력의 플레이스홀더입니다.</param>
+        /// <param name="characterLimit">The maximum number of characters allowed in the plain text input field.<br/>평문 입력 필드에서 허용되는 최대 문자 수입니다.</param>
+        /// <param name="contentType">The content type of the plaintext input (e.g., standard, alphanumeric, email, etc.).<br/>플레인 텍스트 입력의 콘텐츠 유형입니다 (예: 표준, 영숫자, 이메일 등).</param>
+        /// <param name="hint">The hint of the plain text input.<br/>평문 입력의 힌트입니다.</param>
+        /// <param name="onChanged">The action to execute when the text of the plain text input is changed.<br/>평문 입력의 텍스트가 변경될 때 실행할 작업입니다.</param>
+        /// <returns>The builder instance.<br/>빌더 인스턴스를 반환합니다.</returns>
+        public SSPageBuilder AddPlainText(string label, string placeholder = "...", int characterLimit = 64, TMP_InputField.ContentType contentType = TMP_InputField.ContentType.Standard, string hint = null, Action<SSPlainTextElement> onChanged = null)
         {
             var plainText = new SSPlainTextElement
             {
                 Base = new SSPlaintextSetting(++_id, label, placeholder, characterLimit, contentType, hint),
                 OnChanged = onChanged
             };
-            Elements.Add(_id, plainText);
+            Elements.Add(plainText);
             return this;
         }
 
@@ -265,7 +356,7 @@ namespace BetaTester.SS
         /// <returns>The builder instance.<br/>빌더 인스턴스를 반환합니다.</returns>
         public SSPageBuilder AddSlider(string label, float minValue, float maxValue, float defaultValue = 0f,
             bool integer = false, string valueToStringFormat = "0.##", string finalDisplayFormat = "{0}", string hint = null,
-            Action<Player> onChanged = null)
+            Action<SSSliderElement> onChanged = null)
         {
             var slider = new SSSliderElement
             {
@@ -273,7 +364,7 @@ namespace BetaTester.SS
                     finalDisplayFormat, hint),
                 OnChanged = onChanged
             };
-            Elements.Add(_id, slider);
+            Elements.Add(slider);
             return this;
         }
 
@@ -292,7 +383,7 @@ namespace BetaTester.SS
             {
                 Base = new SSTextArea(++_id, content, foldoutMode, collpasedText, textAlignment)
             };
-            Elements.Add(_id, textArea);
+            Elements.Add(textArea);
             return this;
         }
 
@@ -305,14 +396,16 @@ namespace BetaTester.SS
         /// <param name="optionB">The text of the second button.<br/>두 번째 버튼의 텍스트입니다.</param>
         /// <param name="defaultIsB">Whether the default selected button is the second one.<br/>기본 선택된 버튼이 두 번째 버튼인지 여부입니다.</param>
         /// <param name="hint">The hint of the two buttons.<br/>두 개의 버튼의 힌트입니다.</param>
+        /// <param name="onChanged">The action to execute when the button is interacted with.<br/>버튼이 상호작용되었을 때 실행할 작업입니다.</param>
         /// <returns>The builder instance.<br/>빌더 인스턴스를 반환합니다.</returns>
-        public SSPageBuilder AddTwoButtons(string label, string optionA, string optionB, bool defaultIsB = false, string hint = null)
+        public SSPageBuilder AddTwoButtons(string label, string optionA, string optionB, bool defaultIsB = false, string hint = null, Action<SSTwoButtonElement> onChanged = null)
         {
             var twoButtons = new SSTwoButtonElement
             {
                 Base = new SSTwoButtonsSetting(++_id, label, optionA, optionB, defaultIsB, hint),
+                OnChanged = onChanged
             };
-            Elements.Add(_id, twoButtons);
+            Elements.Add(twoButtons);
             return this;
         }
     }
@@ -334,6 +427,10 @@ namespace BetaTester.SS
         /// 항목의 타입입니다.
         /// </summary>
         public abstract SSElementType Type { get; set; }
+
+        public abstract SSElement Clone();
+
+        public int SettingId => Base.SettingId;
 
         /// <summary>
         /// The label of the entry.<br/>
@@ -361,11 +458,21 @@ namespace BetaTester.SS
         /// <inheritdoc />
         public override SSElementType Type { get; set; } = SSElementType.Button;
 
+        /// <inheritdoc />
+        public override SSElement Clone()
+        {
+            return new SSButtonElement
+            {
+                Base = new SSButton(SettingId, Label, ((SSButton)Base).ButtonText, ((SSButton)Base).HoldTimeSeconds, Hint),
+                OnInteract = OnInteract
+            };
+        }
+
         /// <summary>
         /// Triggered when the button is interacted with.<br/>
         /// 버튼이 상호작용 (클릭 및 홀드) 되었을 때 호출됩니다.
         /// </summary>
-        public Action<Player> OnInteract { get; set; }
+        public Action<SSButtonElement> OnInteract { get; set; }
 
         /// <summary>
         /// The text of the button.<br/>
@@ -397,7 +504,22 @@ namespace BetaTester.SS
         /// Triggered when the dropdown value is changed.<br/>
         /// 드롭다운 값이 변경되었을 때 호출됩니다.
         /// </summary>
-        public Action<Player> OnChanged { get; set; }
+        public Action<SSDropdownElement> OnChanged { get; set; }
+
+        public override SSElement Clone()
+        {
+            return new SSDropdownElement
+            {
+                Base = new SSDropdownSetting(
+                    Base.SettingId,
+                    Base.Label,
+                    Options.ToArray(),
+                    DefaultIndex,
+                    EntryType,
+                    Base.HintDescription),
+                OnChanged = OnChanged
+            };
+        }
 
         /// <summary>
         /// The default index of the dropdown.<br/>
@@ -435,6 +557,17 @@ namespace BetaTester.SS
         /// <inheritdoc />
         public override SSElementType Type { get; set; } = SSElementType.GroupHeader;
 
+        public override SSElement Clone()
+        {
+            return new SSGroupHeaderElement
+            {
+                Base = new SSGroupHeader(
+                    Base.Label,
+                    ReducedPadding,
+                    Base.HintDescription)
+            };
+        }
+
         /// <summary>
         /// Whether the group header should have reduced padding.<br/>
         /// 그룹 헤더에 줄어든 패딩이 있는지 여부입니다.
@@ -455,7 +588,21 @@ namespace BetaTester.SS
         /// Triggered when the keybind is interacted with.<br/>
         /// 키바인드가 상호작용되었을 때 호출됩니다.
         /// </summary>
-        public Action<Player> OnInput { get; set; }
+        public Action<SSKeybindElement> OnInput { get; set; }
+
+        public override SSElement Clone()
+        {
+            return new SSKeybindElement
+            {
+                Base = new SSKeybindSetting(
+                    Base.SettingId,
+                    Base.Label,
+                    SuggestedKey,
+                    PreventInteractionOnGUI,
+                    Base.HintDescription),
+                OnInput = OnInput
+            };
+        }
 
         /// <summary>
         /// The suggested key of the keybind.<br/>
@@ -487,7 +634,22 @@ namespace BetaTester.SS
         /// Triggered when the text of the plain text input is changed.<br/>
         /// 평문 입력의 텍스트가 변경되었을 때 호출됩니다.
         /// </summary>
-        public Action<Player> OnChanged { get; set; }
+        public Action<SSPlainTextElement> OnChanged { get; set; }
+
+        public override SSElement Clone()
+        {
+            return new SSPlainTextElement
+            {
+                Base = new SSPlaintextSetting(
+                    Base.SettingId,
+                    Base.Label,
+                    Placeholder,
+                    CharacterLimit,
+                    ContentType,
+                    Base.HintDescription),
+                OnChanged = OnChanged
+            };
+        }
 
         /// <summary>
         /// The text of the plain text input.<br/>
@@ -528,6 +690,10 @@ namespace BetaTester.SS
             get => ((SSPlaintextSetting)Base).CharacterLimit;
             set => ((SSPlaintextSetting)Base).CharacterLimit = value;
         }
+
+        public void ClearText(ReferenceHub hub) => ((SSPlaintextSetting)Base).SendClearRequest(x => x == hub);
+        public void ClearText(Player player) => ClearText(player.ReferenceHub);
+        public void ClearText(Func<ReferenceHub, bool> predicate) => ((SSPlaintextSetting)Base).SendClearRequest(predicate);
     }
 
     public class SSSliderElement : SSElement
@@ -539,7 +705,25 @@ namespace BetaTester.SS
         /// Triggered when the slider value changes.<br/>
         /// 슬라이더 값이 변경될 때 호출됩니다.
         /// </summary>
-        public Action<Player> OnChanged { get; set; }
+        public Action<SSSliderElement> OnChanged { get; set; }
+
+        public override SSElement Clone()
+        {
+            return new SSSliderElement
+            {
+                Base = new SSSliderSetting(
+                    Base.SettingId,
+                    Base.Label,
+                    MinValue,
+                    MaxValue,
+                    DefaultValue,
+                    IsInteger,
+                    ValueToStringFormat,
+                    FinalDisplayFormat,
+                    Base.HintDescription),
+                OnChanged = OnChanged
+            };
+        }
 
         /// <summary>
         /// The minimum value of the slider.<br/>
@@ -627,6 +811,19 @@ namespace BetaTester.SS
         /// <inheritdoc />
         public override SSElementType Type { get; set; } = SSElementType.TextArea;
 
+        public override SSElement Clone()
+        {
+            return new SSTextAreaElement
+            {
+                Base = new SSTextArea(
+                    Base.SettingId,
+                    Label,
+                    FoldoutMode,
+                    Hint,
+                    TextAlignment),
+            };
+        }
+
         /// <summary>
         /// The foldout mode of the text area (e.g., collapsible or not).<br/>
         /// 텍스트 영역의 펼침 모드 (예: 접기 가능 또는 비접기 가능).
@@ -652,6 +849,27 @@ namespace BetaTester.SS
     {
         /// <inheritdoc />
         public override SSElementType Type { get; set; } = SSElementType.TwoButtons;
+
+        /// <summary>
+        /// Triggered when the value of the two buttons is changed.<br/>
+        /// 두 개의 버튼의 값이 변경되었을 때 호출됩니다.
+        /// </summary>
+        public Action<SSTwoButtonElement> OnChanged { get; set; }
+
+        public override SSElement Clone()
+        {
+            return new SSTwoButtonElement
+            {
+                Base = new SSTwoButtonsSetting(
+                    Base.SettingId,
+                    Base.Label,
+                    OptionA,
+                    OptionB,
+                    DefaultIsB,
+                    Base.HintDescription),
+                OnChanged = OnChanged
+            };
+        }
 
         /// <summary>
         /// Indicates whether the second button (option B) is selected.<br/>

@@ -15,7 +15,7 @@ namespace BetaTester.Features
 
         public static void Initialize()
         {
-            PageManager = new SSPageManager(new SSPageBuilder()
+            var builder = new SSPageBuilder()
                 .AddGroupHeader("<size=130%>User Reporting / 플레이어 신고</size>")
                 .AddPlainText("플레이어 검색", "플레이어 이름을 입력하세요.", 256, TMP_InputField.ContentType.Standard,
                     "신고할 플레이어의 이름을 입력하세요.", OnPlayerInput, "PlayerSearch")
@@ -37,7 +37,9 @@ namespace BetaTester.Features
                 .AddPlainText("자세한 상황", "상황을 더 자세히 설명해주세요.", 512, TMP_InputField.ContentType.Custom,
                     "플레이어에 대한 추가 정보를 입력하세요.")
                 .AddGroupHeader("신고")
-                .AddButton("신고", "위 사항으로 신고하겠습니다.", 2f, hint: "선택한 옵션으로 플레이어를 신고합니다."));
+                .AddButton("신고", "위 사항으로 신고하겠습니다.", 2f, hint: "선택한 옵션으로 플레이어를 신고합니다.").Elements;
+
+            PageManager = new SSPageManager(builder);
         }
 
         private static void OnPlayerInput(SSPlainTextElement element)
@@ -67,9 +69,8 @@ namespace BetaTester.Features
                             result.DisplayNickname + " (ID: " + result.PlayerId + ")", "선택", null, null),
                         OnInteract = x =>
                         {
-                            // remove inputfield
                             page.Elements.Remove(element);
-                            // remove all buttons
+
                             foreach (var r in page.GetElements("PlayerSearchResult").ToArray())
                             {
                                 page.Elements.Remove(r);
@@ -182,11 +183,12 @@ namespace BetaTester.Features
 
             if (page == null)
             {
-                Log.Error($"Received null page for player: {hub.nicknameSync.MyNick} ({hub.netId}) at {DateTime.UtcNow}.");
+                Log.Error(
+                    $"Received null page for player: {hub.nicknameSync.MyNick} ({hub.netId}) at {DateTime.UtcNow}.");
                 return;
             }
 
-            page.OnUserInputReceived(entry, reader);
+            page.ProcessUserInput(entry, reader);
         }
 
         public void SendAll()
@@ -205,6 +207,25 @@ namespace BetaTester.Features
         public void Dispose()
         {
             Pages.Clear();
+        }
+    }
+
+    public class SSPageContainer
+    {
+        public List<SSPage> Pages { get; }
+
+        public SSPageContainer()
+        {
+            Pages = new List<SSPage>();
+        }
+
+        public SSPageContainer(SSPageBuilder builder)
+        {
+        }
+
+        public SSPageContainer(List<SSPage> pages)
+        {
+            Pages = pages;
         }
     }
 
@@ -274,7 +295,7 @@ namespace BetaTester.Features
         public SSElement GetElement(int id) => Elements.FirstOrDefault(x => x.Base.SettingId == id);
         public bool TryGetElement(int id, out SSElement element) => (element = GetElement(id)) != null;
 
-        internal void OnUserInputReceived(ServerSpecificSettingBase entry, NetworkReaderPooled copy)
+        internal void ProcessUserInput(ServerSpecificSettingBase entry, NetworkReaderPooled copy)
         {
             if (entry == null)
             {

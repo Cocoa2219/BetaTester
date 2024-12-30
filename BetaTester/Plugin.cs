@@ -1,11 +1,15 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Reflection.Emit;
 using BetaTester.Features;
 using HarmonyLib;
 using Mirror;
 using PluginAPI.Core.Attributes;
 using PluginAPI.Enums;
 using UserSettings.ServerSpecific;
+using VoiceChat.Codec;
+using VoiceChat.Networking;
 
 namespace BetaTester;
 
@@ -30,11 +34,24 @@ public class Plugin
         Harmony.PatchAll();
 
         SSHandler.Initialize();
+
+        VoiceTransceiver.OnVoiceMessageReceiving += OnReceivingVoiceMessage;
+    }
+
+    private OpusDecoder _decoder = new();
+    private float[] _samples = new float[24000];
+
+    private void OnReceivingVoiceMessage(VoiceMessage message, ReferenceHub hub)
+    {
+        var length = _decoder.Decode(message.Data, message.Data.Length, _samples);
+
     }
 
     [PluginUnload]
     private void OnDisabled()
     {
+        VoiceTransceiver.OnVoiceMessageReceiving -= OnReceivingVoiceMessage;
+
         PluginAPI.Events.EventManager.UnregisterEvents(this);
 
         SSHandler.Dispose();

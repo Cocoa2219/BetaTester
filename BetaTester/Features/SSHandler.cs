@@ -6,6 +6,10 @@ using PluginAPI.Core;
 using TMPro;
 using UnityEngine;
 using UserSettings.ServerSpecific;
+using UserSettings.ServerSpecific.Entries;
+using VoiceChat.Codec;
+using VoiceChat.Codec.Enums;
+using VoiceChat.Networking;
 
 namespace BetaTester.Features
 {
@@ -15,117 +19,13 @@ namespace BetaTester.Features
 
         public static void Initialize()
         {
-            var builder = new SSPageBuilder()
-                .AddGroupHeader("<size=130%>User Reporting / 플레이어 신고</size>")
-                .AddPlainText("플레이어 검색", "플레이어 이름을 입력하세요.", 256, TMP_InputField.ContentType.Standard,
-                    "신고할 플레이어의 이름을 입력하세요.", OnPlayerInput, "PlayerSearch")
-                .AddGroupHeader("의사소통")
-                .AddTwoButtons("💬 부적절한 텍스트 채팅", "해당됩니다.", "해당되지 않습니다.", true, "플레이어가 부적절한 텍스트 채팅을 했는지 여부를 선택하세요.")
-                .AddTwoButtons("🔊 부적절한 음성 채팅", "해당됩니다.", "해당되지 않습니다.", true, "플레이어가 부적절한 음성 채팅을 했는지 여부를 선택하세요.")
-                .AddTwoButtons("😠 공격적인 이름", "해당됩니다.", "해당되지 않습니다.", true, "플레이어가 부적절한 이름을 사용했는지 여부를 선택하세요.")
-                .AddTwoButtons("💥 위협", "해당됩니다.", "해당되지 않습니다.", true, "플레이어가 다른 플레이어를 위협했는지 여부를 선택하세요.")
-                .AddTwoButtons("💀 비매너 행위", "해당됩니다.", "해당되지 않습니다.", true, "플레이어가 비매너 행위를 했는지 여부를 선택하세요.")
-                .AddGroupHeader("게임플레이 방해")
-                .AddTwoButtons("🔧 부정행위", "해당됩니다.", "해당되지 않습니다.", true, "플레이어가 부정행위를 했는지 여부를 선택하세요.")
-                .AddTwoButtons("🐞 버그 사용", "해당됩니다.", "해당되지 않습니다.", true, "플레이어가 버그를 사용했는지 여부를 선택하세요.")
-                .AddTwoButtons("👥 팀원 방해", "해당됩니다.", "해당되지 않습니다.", true, "플레이어가 팀원을 방해했는지 여부를 선택하세요.")
-                .AddGroupHeader("참여도")
-                .AddTwoButtons("🚪 게임에서 나감 / 자리 비움", "해당됩니다.", "해당되지 않습니다.", true,
-                    "플레이어가 게임에서 나갔거나 자리를 비웠는지 여부를 선택하세요.")
-                .AddTwoButtons("👾 매크로", "해당됩니다.", "해당되지 않습니다.", true, "플레이어가 매크로를 사용했는지 여부를 선택하세요.")
-                .AddGroupHeader("기타")
-                .AddPlainText("자세한 상황", "상황을 더 자세히 설명해주세요.", 512, TMP_InputField.ContentType.Custom,
-                    "플레이어에 대한 추가 정보를 입력하세요.")
-                .AddGroupHeader("신고")
-                .AddButton("신고", "위 사항으로 신고하겠습니다.", 2f, hint: "선택한 옵션으로 플레이어를 신고합니다.").Elements;
-
-            PageManager = new SSPageManager(builder);
-        }
-
-        private static void OnPlayerInput(SSPlainTextElement element)
-        {
-            var page = element.Page;
-
-            var res = page.GetElements("PlayerSearchResult");
-
-            foreach (var result in res.ToArray())
-            {
-                page.Elements.Remove(result);
-            }
-
-            if (!string.IsNullOrWhiteSpace(element.Text))
-            {
-                var results = Player.GetPlayers().Except([Player.Get(element.Owner)]);
-
-                var matches = results.Where(x =>
-                        x.DisplayNickname.ToLower().Replace(" ", "").Contains(element.Text.ToLower().Replace(" ", "")))
-                    .ToArray();
-
-                var index = page.Elements.FindIndex(x => x.Tag == "PlayerSearch") + 1;
-
-                var buttons = matches.Select(result => new SSButtonElement
-                    {
-                        Base = new SSButton(SSElementIdGenerator.GenerateId(),
-                            result.DisplayNickname + " (ID: " + result.PlayerId + ")", "선택", null, null),
-                        OnInteract = x =>
-                        {
-                            page.Elements.Remove(element);
-
-                            foreach (var r in page.GetElements("PlayerSearchResult").ToArray())
-                            {
-                                page.Elements.Remove(r);
-                            }
-
-                            // add new text area
-                            page.Elements.Insert(index - 1, new SSTextAreaElement
-                            {
-                                Base = new SSTextArea(SSElementIdGenerator.GenerateId(),
-                                    result.DisplayNickname + " (ID: " + result.PlayerId + ")",
-                                    SSTextArea.FoldoutMode.NotCollapsable, null, TextAlignmentOptions.Left),
-                                Tag = "PlayerSearchResultTextArea",
-                                Page = page
-                            });
-
-                            // add unselct button
-                            page.Elements.Insert(index, new SSButtonElement
-                            {
-                                Base = new SSButton(SSElementIdGenerator.GenerateId(), "선택 취소", "취소", null, null),
-                                OnInteract = y =>
-                                {
-                                    // remove text area
-                                    page.Elements.Remove(page.GetElement("PlayerSearchResultTextArea"));
-                                    // remove unselct button
-                                    page.Elements.Remove(y);
-                                    // add inputfield
-                                    page.Elements.Insert(index - 1, new SSPlainTextElement
-                                    {
-                                        Base = new SSPlaintextSetting(SSElementIdGenerator.GenerateId(), "플레이어 검색",
-                                            "플레이어 이름을 입력하세요.", 256, TMP_InputField.ContentType.Standard,
-                                            "신고할 플레이어의 이름을 입력하세요."),
-                                        OnChanged = OnPlayerInput,
-                                        Tag = "PlayerSearch",
-                                        Page = page
-                                    });
-
-                                    page.Send();
-                                }
-                            });
-
-                            page.Send();
-                        },
-                        Tag = "PlayerSearchResult"
-                    })
-                    .ToList();
-
-                page.Elements.InsertRange(index, buttons);
-            }
-
-            page.Send();
+            PageManager = new SSPageManager();
         }
 
         public static void OnJoin(ReferenceHub hub)
         {
-            PageManager.Send(hub);
+            var page = PageManager.Get(hub);
+            page.Send();
         }
 
         public static void Dispose()
@@ -135,7 +35,8 @@ namespace BetaTester.Features
 
         public static void OnLeave(ReferenceHub hub)
         {
-            PageManager.Pages.Remove(hub);
+            var page = PageManager.Get(hub);
+            page.Send();
         }
     }
 
